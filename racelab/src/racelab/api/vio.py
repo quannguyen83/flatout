@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import shlex
+import socket
+import math
 import shutil
 import sys
 import tempfile
@@ -44,6 +46,7 @@ class Vio:
         self.cache = tempfile.TemporaryDirectory(prefix="racelab-vio-")
         self.live_processes = set()
         self.local_stopping = False
+        self.preview_port = 0
 
     def connected(self):
         return self.ssh is not None and not self.ssh.is_closed()
@@ -107,6 +110,7 @@ class Vio:
             "active_dataset": self.active_dataset.name if self.active_dataset else "",
             "datasets": self.datasets(), "receiver_file": self.receiver_file,
             "ffmpeg": bool(shutil.which("ffmpeg")),
+            "preview_port": self.preview_port,
         }
 
     async def collect_local(self, proc):
@@ -189,6 +193,19 @@ class Vio:
                 command = str(data.get("command", "")).strip()
                 if not directory or not command:
                     raise ValueError("Directory and command are required")
+                params = data.get("params", {})
+                allowed = {"video-port", "data-port", "width", "height", "fps", "mjpeg-bitrate",
+                           "rtp-mtu", "lens-position", "af-log-interval", "exposure-us", "gain",
+                           "imu-rate", "mag-rate", "light-rate", "imu-ready-poll-sleep", "af-mode"}
+                if not isinstance(params, dict) or set(params) - allowed:
+                    raise ValueError("Invalid Pi-send parameters")
+                for key, value in params.items():
+                    if key == "af-mode":
+                        if value not in ("auto", "manual", "continuous"):
+                            raise ValueError("Invalid autofocus mode")
+                    elif not math.isfinite(float(value)) or float(value) < 0:
+                        raise ValueError("Invalid numeric parameter: " + key)
+                    command += " --" + key + " " + shlex.quote(str(value))
                 path = '"$HOME"' + ("/" + shlex.quote(directory[2:]) if directory.startswith("~/") else "") if directory == "~" or directory.startswith("~/") else shlex.quote(directory)
                 self.logs["pi"].clear()
                 self.remote_rc = None
@@ -205,6 +222,13 @@ class Vio:
                 if self.local_running():
                     raise ValueError("Receiver already running")
                 script, args = self.receiver_config(data)
+                if any(x == "--preview-port" or x.startswith("--preview-port=") for x in args):
+                    raise ValueError("RaceLab manages the preview port")
+                # Reserve an available loopback port for the receiver (released before launch).
+                with socket.socket() as probe:
+                    probe.bind(("127.0.0.1", 0))
+                    self.preview_port = probe.getsockname()[1]
+                args += ["--preview-port", str(self.preview_port)]
                 self.active_dataset = None
                 self.logs["receiver"].clear()
                 self.local_rc = None
@@ -269,43 +293,44 @@ class Vio:
             return target
 
     async def live(self, request):
-        ffmpeg = shutil.which("ffmpeg")
-        directory = self.active_dataset
-        if not ffmpeg or not directory or not self.local_running() or self.local_stopping:
-            raise ValueError("Live preview requires FFmpeg and an active receiver")
-        source = directory / "video.mkv"
-        if not source.is_file() or source.stat().st_size == 0:
-            raise ValueError("Waiting for recorded video")
-        # Follow the growing recording instead of binding the receiver's UDP port.
-        # The native GStreamer preview remains available if the installed FFmpeg cannot follow it.
-        proc = await asyncio.create_subprocess_exec(
-            ffmpeg, "-hide_banner", "-loglevel", "error", "-follow", "1", "-i", str(source),
-            "-an", "-vf", "fps=10,scale=960:-2", "-c:v", "mjpeg", "-q:v", "5",
-            "-f", "mpjpeg", "-boundary_tag", "racelab", "pipe:1",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        self.live_processes.add(proc)
+        port = self.preview_port
+        proc = self.local
+        if not port or not self.local_running() or self.local_stopping:
+            raise ValueError("Start the receiver first")
+        # GStreamer starts its TCP sink asynchronously. Wait briefly for readiness.
+        for _ in range(50):
+            if self.local is not proc or not self.local_running() or self.local_stopping:
+                raise ValueError("Receiver stopped")
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                break
+            except OSError:
+                await asyncio.sleep(0.1)
+        else:
+            raise ValueError("Receiver preview unavailable; inspect receiver logs")
         response = web.StreamResponse(headers={
             "Content-Type": "multipart/x-mixed-replace; boundary=racelab",
             "Cache-Control": "no-store"})
         try:
             await response.prepare(request)
-            while self.local_running() and not self.local_stopping and self.active_dataset == directory:
+            while self.local is proc and self.local_running() and not self.local_stopping:
                 if request.transport is None or request.transport.is_closing():
                     break
                 try:
-                    chunk = await asyncio.wait_for(proc.stdout.read(32768), 2)
+                    chunk = await asyncio.wait_for(reader.read(32768), 1)
                 except TimeoutError:
                     continue
                 if not chunk:
                     break
-                await response.write(chunk)
-        except (ConnectionError, asyncio.CancelledError):
+                await asyncio.wait_for(response.write(chunk), 2)
+        except (ConnectionError, asyncio.CancelledError, TimeoutError):
             pass
         finally:
-            if proc.returncode is None:
-                proc.kill()
-            await proc.wait()
-            self.live_processes.discard(proc)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
         return response
 
     async def close(self):
