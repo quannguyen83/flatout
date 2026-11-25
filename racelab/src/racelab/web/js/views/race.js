@@ -3,7 +3,7 @@ import {
   GATE_LABEL, STATE_CHIP, STATE_LABEL, clock, gap, h, inkOn, lapTime, s, setText, toggle, wallTime,
 } from "../dom.js";
 import { logText, t, tOr } from "../i18n.js";
-import { botsUnavailable, onEvent, profileLabel as profileKindLabel, request, sessionCounter, sessionInfo, sessionLabel, store } from "../store.js";
+import { authHeaders, botsUnavailable, onEvent, profileLabel as profileKindLabel, request, sessionCounter, sessionInfo, sessionLabel, store } from "../store.js";
 import { FuelGauge, Fader, fillConnectors, Lights, Segmented, Spark, Stepper, Toggle, confirmModal, openDrawer, run, toast } from "../ui/components.js";
 import { hub } from "../input.js";
 import { ConnectChooser } from "./connect.js";
@@ -67,7 +67,7 @@ export class RaceView {
     // right column
     this.bestValue = h("div.value", { text: "—" });
     this.bestWho = h("div.who-line");
-    this.best = h("section.panel.best", {}, h("div.eyebrow", { text: t("race.best_lap") }), this.bestValue, this.bestWho);
+    this.best = h("section.panel.lap-times", {}, h("div.panel-head", {}, h("h2", { text: "Lap Times" })), this.bestWho);
     this.mapSource = h("span.chip");
     this.mapConnectors = h("span.connector-chips");
     this.mapBox = h("section.panel.hidden", {},
@@ -103,6 +103,7 @@ export class RaceView {
     this.track = null;
     this.mapBox.querySelector(".trackmap").replaceChildren();
     this.fillFeed();
+    this.bestSig = null;
   }
 
   fillFeed() {
@@ -221,7 +222,7 @@ export class RaceView {
       return;
     }
     const fuelShown = state.cu.pit_lane || state.cu.fuel_mode;
-    const cars = state.cars.filter((c) => c.enabled || c.laps > 0);
+    const cars = state.cars.filter((c) => c.slot < 2 && (c.enabled || c.laps > 0));
     const seen = new Set();
     const order = [];
     for (const car of cars) {
@@ -335,22 +336,38 @@ export class RaceView {
   }
 
   updateBest(state, sess) {
-    const best = sess.best;
-    if (!best) {
-      setText(this.bestValue, "—");
-      this.bestWho.replaceChildren(h("span.faint", { text: t("race.best_lap_none") }));
-      this.bestSig = null;
-      return;
-    }
-    const sig = `${best.slot}:${best.ms}`;
+    const sig = JSON.stringify([sess.id, sess.state, state.cars.map(c => [c.slot, c.laps, c.last_ms])]);
     if (this.bestSig === sig) return;
     this.bestSig = sig;
-    const car = state.cars.find((c) => c.slot === best.slot);
-    setText(this.bestValue, lapTime(best.ms));
-    this.bestWho.replaceChildren(
-      h("span.swatch", { style: { "--car": car?.color } }),
-      h("span", { text: car?.name || `#${best.slot + 1}` }),
-      h("span.faint", { text: t("race.best_lap_on", { n: best.lap }) }));
+    const revision = this.lapRevision = (this.lapRevision || 0) + 1;
+    if (sess.state === "idle") {
+      this.bestWho.replaceChildren(h("p.faint", { text: "No completed laps" }));
+      return;
+    }
+    fetch("/api/laps", { headers: authHeaders(), cache: "no-store" }).then(r => {
+      if (!r.ok) throw Error("Lap history unavailable");
+      return r.json();
+    }).then(laps => {
+      if (revision !== this.lapRevision) return;
+      const rows = new Map();
+      for (const lap of laps) {
+        if (lap.slot < 0 || lap.slot > 1) continue;
+        const row = rows.get(lap.lap) || [];
+        row[lap.slot] = lap;
+        rows.set(lap.lap, row);
+      }
+      const name = slot => state.cars.find(c => c.slot === slot)?.name || "Driver " + (slot + 1);
+      const cell = lap => lap ? lapTime(lap.ms) + (lap.neutralized ? " *" : "") : "—";
+      this.bestWho.replaceChildren(h("table.vio-laps", {},
+        h("thead", {}, h("tr", {}, h("th", {}, "Lap"), h("th", {}, name(0)), h("th", {}, name(1)))),
+        h("tbody", {}, ...[...rows.entries()].sort((a,b) => a[0]-b[0]).map(([n, row]) =>
+          h("tr", {}, h("td", {}, n), h("td.num", {}, cell(row[0])), h("td.num", {}, cell(row[1])))))),
+        h("p.faint", { text: rows.size ? "* Neutralized lap" : "No completed laps" }));
+    }).catch(e => {
+      if (revision !== this.lapRevision) return;
+      this.bestWho.replaceChildren(h("p.faint", { text: e.message }));
+      this.bestSig = null;
+    });
   }
 
   // ------------------------------------------------------------ map (simulator)
@@ -430,7 +447,7 @@ export class RaceView {
     this.botsOff.disabled = !idle;
     this.botsOff.title = idle ? t("bots.off_title") : t("mode.busy");
     if (!this.botCards.length) {
-      for (const bot of state.bots) {
+      for (const bot of state.bots.filter((b) => b.slot < 2)) {
         const card = new BotCard(bot.slot);
         this.botCards.push(card);
         this.botsGrid.append(card.el);

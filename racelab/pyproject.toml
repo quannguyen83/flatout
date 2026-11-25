@@ -25,6 +25,7 @@ dependencies = [
     "aiohttp >= 3.9",
     "bleak >= 3.0",
     "pyserial >= 3.5",
+    "asyncssh >= 2.14",
 ]
 
 [project.optional-dependencies]

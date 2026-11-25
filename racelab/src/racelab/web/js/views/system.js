@@ -7,6 +7,7 @@ import { Segmented, Stepper, Toggle, confirmModal, copyText, fillConnectors, pan
 import { FirmwarePanel } from "./firmware.js";
 import { ConnectChooser } from "./connect.js";
 import { HwTestPanel } from "./hwtest.js";
+import { RpiPanel } from "./vio.js";
 
 const TRANSPORT = {
   ble: t("sys.transport.ble"), serial: t("sys.transport.serial"), sim: t("sys.transport.sim"), none: t("sys.transport.none"),
@@ -81,6 +82,7 @@ export class SystemView {
     this.historyAt = -1;
 
     this.buildConnection();
+    this.rpiPanel = new RpiPanel();
     this.buildButtons();
     this.buildGarage();
     this.buildConsole();
@@ -95,7 +97,7 @@ export class SystemView {
     root.append(h("div.screen.sys", {},
       h("h1.page", { text: t("nav.system") }),
       h("div.sys-cols", {},
-        h("div.sys-col", {}, this.connPanel, this.buttonsPanel, this.consolePanel),
+        h("div.sys-col", {}, this.connPanel, this.rpiPanel.el, this.buttonsPanel, this.consolePanel),
         h("div.sys-col", {}, this.updatePanel, this.apiPanel, this.connectorsPanel, this.fwPanel.el)),
       this.hwPanel.el,
       this.logPanel,
@@ -110,6 +112,7 @@ export class SystemView {
   destroy() {
     this.off.forEach((f) => f());
     this.hwPanel.destroy();
+    this.rpiPanel.destroy();
     // the raw trace must not keep running once the screen is left
     if (this.tracing) request("subscribe", { raw: false }).catch(() => {});
   }

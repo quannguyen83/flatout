@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-REPO = "CarlosMagni/flatout"
+REPO = "quannguyen83/flatout"
 BRANCH = "main"
 ROOT = Path(__file__).resolve().parents[3]  # racelab/src/racelab/update.py -> the repository
 VERSION = ROOT / "VERSION"

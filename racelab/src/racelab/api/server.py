@@ -22,6 +22,7 @@ from aiohttp import WSMsgType, web
 
 from ..app import LONG_OPS, RaceLabApp
 from ..errors import OpError
+from .vio import register_vio
 
 logger = logging.getLogger(__name__)
 
@@ -297,4 +298,5 @@ def create_web_app(app: RaceLabApp) -> web.Application:
         web.post("/api/{op}", post_op),
         web.static("/ui", WEB_DIR, append_version=False),
     ])
+    register_vio(web_app)
     return web_app

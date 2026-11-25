@@ -132,7 +132,7 @@ class DriverConfig:
 
 def default_drivers() -> list[DriverConfig]:
     return [
-        DriverConfig(slot=i, name=DEFAULT_NAMES[i], color=DEFAULT_COLORS[i], enabled=i < 6)
+        DriverConfig(slot=i, name=DEFAULT_NAMES[i], color=DEFAULT_COLORS[i], enabled=i < 2)
         for i in range(8)
     ]
 

@@ -1,0 +1,7 @@
+# VIO experiment view (fork)
+- Two visible software-driver cards; the six-slot CU frame is unchanged. New configuration defaults to two enabled drivers. Existing configs can disable additional slots under Session > Additional slots (an enabled hidden slot can still affect race results).
+- System > RPi Connection uses SSH with host-key verification. Trust the Pi key with your normal SSH client first. Password is not persisted. Key authentication is supported.
+- VIO has independent Run/Stop for the remote sender and existing local receiver. Enter the remote directory and command, including laptop IP; select the local Python file, optional arguments and interpreter. The receiver uses its own working directory and reports the actual dataset path. Do not use receiver --carrera-device concurrently with RaceLab.
+- Keep GStreamer installed as required by the receiver. For embedded video add FFmpeg (with libx264) to PATH. Native preview stays enabled by default. Embedded Live follows the growing MKV, may lag, and depends on FFmpeg build/Matroska support; Replay transcodes completed MKV into a temporary browser-compatible MP4. Neither changes original data.
+- Local process/SSH endpoints are deliberately restricted to localhost; existing API authentication also applies. Remote/local capture stop is graceful; if the process doesn't exit, inspect logs before manual intervention.
+- Initial hardware validation: run receiver first, then sender; check preview, IMU files, stop sender, then receiver, check dataset, replay. Existing CU E-stop is unchanged.

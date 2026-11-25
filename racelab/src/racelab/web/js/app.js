@@ -4,6 +4,7 @@ import { t, translateStatic } from "./i18n.js";
 import { botsUnavailable, connect, onEvent, onState, refreshMeta, request, store } from "./store.js";
 import { estopButton, noteEstop, run, toast } from "./ui/components.js";
 import { RaceView } from "./views/race.js";
+import { VioView } from "./views/vio.js";
 import { SetupView } from "./views/setup.js";
 import { HistoryView } from "./views/history.js";
 import { SystemView } from "./views/system.js";
@@ -12,7 +13,7 @@ import { hub } from "./input.js";
 import { ScreenView } from "./views/screen.js";
 
 // `ecran` is the former (French) name of the big-screen route, kept for old bookmarks
-const ROUTES = { race: RaceView, setup: SetupView, history: HistoryView, settings: SettingsView, system: SystemView, screen: ScreenView, ecran: ScreenView };
+const ROUTES = { race: RaceView, vio: VioView, setup: SetupView, history: HistoryView, settings: SettingsView, system: SystemView, screen: ScreenView, ecran: ScreenView };
 const viewRoot = document.getElementById("view");
 translateStatic(); // static texts of index.html
 let current = null;

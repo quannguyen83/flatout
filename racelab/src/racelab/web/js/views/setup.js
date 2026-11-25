@@ -432,9 +432,9 @@ export class SetupView {
     for (const d of drivers) {
       const row = new DriverRow(d, (r) => this.touch(r));
       this.rows[d.slot] = row;
-      (d.slot < 6 ? main : extra).append(row.el);
+      (d.slot < 2 ? main : extra).append(row.el);
     }
-    const specialOn = drivers.some((d) => d.slot >= 6 && d.enabled);
+    const specialOn = drivers.some((d) => d.slot >= 2 && d.enabled);
     this.saveState = h("span.save-state", { role: "status", "aria-live": "polite" });
     this.retry = h("button.btn.ghost.sm.hidden", { type: "button", onclick: () => this.flush() }, t("common.retry"));
     this.driversPanel = h("section.panel.drivers", {},
@@ -444,7 +444,7 @@ export class SetupView {
       main,
       extra.childElementCount
         ? h("details.drv-extra", { open: specialOn },
-          h("summary", {}, h("span", { text: t("setup.special") }), h("span.faint", { text: t("setup.special_desc") })),
+          h("summary", {}, h("span", { text: "Additional slots" }), h("span.faint", { text: "Disable unused slots for two-driver experiments" })),
           extra)
         : null);
     this.setSave("idle");
