@@ -193,13 +193,16 @@ export class VioView extends RaceView {
     const s = this.vioState || {};
     this.piRun.disabled = !s.connected || !!s.pi_running || this.pending.has("pi");
     this.piStop.disabled = !s.pi_running || this.pending.has("pi");
-    this.pcRun.disabled = !this.vioState || !!s.receiver_running || this.pending.has("receiver");
+    this.pcRun.disabled = !this.vioState || !Object.hasOwn(s, "preview_port") || !!s.receiver_running || this.pending.has("receiver");
     this.pcStop.disabled = !s.receiver_running || this.pending.has("receiver");
   }
   renderVio(s) {
     if (!s || !s.logs) return;
     this.vioState = s;
     this.syncButtons();
+    if (!Object.hasOwn(s, "preview_port")) {
+      setText(this.error, "The running RaceLab backend is outdated. Stop acquisition, quit RaceLab completely and reopen the installed app.");
+    }
     setText(this.piStatus, s.pi_running ? "Running" : s.connected ? "SSH connected" : "SSH disconnected");
     setText(this.receiverStatus, s.receiver_running ? "Running" : s.receiver_exit == null ? "Idle" : "Exit " + s.receiver_exit);
     setText(this.datasetRoot, s.dataset_root ? "Dataset: " + s.dataset_root : "Dataset detected from receiver output");
