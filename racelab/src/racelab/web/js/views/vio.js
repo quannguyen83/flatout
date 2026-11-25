@@ -103,7 +103,14 @@ export class VioView extends RaceView {
     this.piRun = button("Run", () => act("pi-start", {directory: dir.input.value, command: cmd.input.value}, "pi"), "go");
     this.piStop = button("Stop", () => act("pi-stop", {}, "pi"), "danger");
     this.pcRun = button("Run", () => act("receiver-start", {file: file.input.value, args: args.input.value, python: python.input.value}, "receiver"), "go");
-    this.pcStop = button("Stop", () => act("receiver-stop", {}, "receiver"), "danger");
+    this.pcStop = button("Stop", () => { if (this.mode === "live") this.clearMedia(); act("receiver-stop", {}, "receiver"); }, "danger");
+    const configure = () => {
+      if (!file.input.value || this.vioState?.receiver_running) return;
+      api("action/receiver-config", {file: file.input.value, args: args.input.value})
+        .then(state => this.renderVio(state)).catch(e => setText(this.error, e.message));
+    };
+    file.input.addEventListener("change", configure);
+    args.input.addEventListener("change", configure);
     this.browse = button("Browse", async () => {
       this.browse.disabled = true;
       try {
@@ -137,6 +144,7 @@ export class VioView extends RaceView {
         h("div.vio-column", {}, this.best, this.feedBox))));
     this.syncButtons();
     this.poll = new Poll(state => this.renderVio(state), msg => setText(this.error, msg));
+    configure();
   }
   updateMap() {} // VIO does not render a track map.
   destroy() {

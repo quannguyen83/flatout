@@ -18,5 +18,5 @@
 .vio-laps th:first-child,.vio-laps td:first-child { text-align:left; }
 .lap-times { padding:14px; }
 .lap-times .who-line { display:block; }
-.vio .bots-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.race .bots-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 @media(max-width:850px) { .vio-config,.vio-grid { grid-template-columns:1fr; } }

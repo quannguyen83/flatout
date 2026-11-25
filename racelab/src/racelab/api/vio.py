@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import hashlib
+import json
 import os
 import shlex
 import shutil
@@ -40,7 +42,8 @@ class Vio:
         self.lock = asyncio.Lock()
         self.media_lock = asyncio.Lock()
         self.cache = tempfile.TemporaryDirectory(prefix="racelab-vio-")
-        self.replay_source = None
+        self.live_processes = set()
+        self.local_stopping = False
 
     def connected(self):
         return self.ssh is not None and not self.ssh.is_closed()
@@ -59,10 +62,40 @@ class Vio:
         for directory in root.iterdir():
             if not directory.is_dir() or directory.is_symlink():
                 continue
-            video = directory / "video.mkv"
-            if video.is_file() and not video.is_symlink():
+            if self.find_video(directory) is not None:
                 result.append(directory.name)
         return sorted(result, reverse=True)
+
+    @staticmethod
+    def find_video(directory):
+        # The receiver renames video.mkv on shutdown and records its name in summary.json.
+        candidates = []
+        try:
+            name = json.loads((directory / "summary.json").read_text(encoding="utf-8")).get("video_file")
+            if isinstance(name, str) and Path(name).name == name and name.endswith(".mkv"):
+                candidates.append(directory / name)
+        except (OSError, ValueError, AttributeError):
+            pass
+        candidates.append(directory / "video.mkv")
+        candidates.extend(sorted(directory.glob("video_*.mkv")))
+        return next((p for p in candidates if p.is_file() and not p.is_symlink()), None)
+
+    def receiver_config(self, data):
+        script = Path(str(data.get("file", ""))).expanduser().resolve()
+        if not script.is_file() or script.suffix.lower() != ".py":
+            raise ValueError("Select an existing Python receiver file")
+        args = shlex.split(str(data.get("args", "")))
+        if any(a.startswith("--carrera") for a in args):
+            raise ValueError("RaceLab already owns the CU link; omit receiver Carrera options")
+        output = "dataset"
+        for i, arg in enumerate(args):
+            if arg == "--output" and i + 1 < len(args):
+                output = args[i + 1]
+            elif arg.startswith("--output="):
+                output = arg.split("=", 1)[1]
+        self.dataset_root = (script.parent / Path(output).expanduser()).resolve()
+        self.receiver_file = str(script)
+        return script, args
 
     def state(self):
         return {
@@ -101,12 +134,20 @@ class Vio:
     async def stop_local(self):
         if not self.local_running():
             return
-        self.local.stdin.write(b"stop\n")
-        await self.local.stdin.drain()
+        self.local_stopping = True
         try:
+            # Close the growing MKV before Windows attempts the receiver's rename.
+            for proc in list(self.live_processes):
+                if proc.returncode is None:
+                    proc.kill()
+                await proc.wait()
+            self.local.stdin.write(b"stop\n")
+            await self.local.stdin.drain()
             await asyncio.wait_for(asyncio.shield(self.local_task), 15)
         except TimeoutError:
             raise ValueError("Receiver has not stopped; inspect logs before terminating it manually")
+        finally:
+            self.local_stopping = False
 
     async def stop_remote(self):
         if not self.remote_running():
@@ -157,24 +198,14 @@ class Vio:
                 self.remote_task = asyncio.create_task(self.collect_remote(self.remote))
             elif op == "pi-stop":
                 await self.stop_remote()
+            elif op == "receiver-config":
+                if not self.local_running():
+                    self.receiver_config(data)
             elif op == "receiver-start":
                 if self.local_running():
                     raise ValueError("Receiver already running")
-                script = Path(str(data.get("file", ""))).expanduser().resolve()
-                if not script.is_file() or script.suffix.lower() != ".py":
-                    raise ValueError("Select an existing Python receiver file")
-                args = shlex.split(str(data.get("args", "")))
-                if any(a == "--carrera-device" or a.startswith("--carrera-device=") for a in args):
-                    raise ValueError("RaceLab already owns the CU link; do not use --carrera-device")
-                output = "dataset"
-                for i, arg in enumerate(args):
-                    if arg == "--output" and i + 1 < len(args):
-                        output = args[i + 1]
-                    elif arg.startswith("--output="):
-                        output = arg.split("=", 1)[1]
-                self.dataset_root = (script.parent / Path(output).expanduser()).resolve()
+                script, args = self.receiver_config(data)
                 self.active_dataset = None
-                self.receiver_file = str(script)
                 self.logs["receiver"].clear()
                 self.local_rc = None
                 python = str(data.get("python", "")).strip() or sys.executable
@@ -209,7 +240,7 @@ class Vio:
     def video(self, name):
         if name not in self.datasets():
             raise ValueError("Unknown dataset")
-        return self.dataset_root / name / "video.mkv"
+        return self.find_video(self.dataset_root / name)
 
     async def replay(self, name):
         source = self.video(name)
@@ -221,26 +252,26 @@ class Vio:
         stat = source.stat()
         key = (str(source), stat.st_mtime_ns, stat.st_size)
         async with self.media_lock:
-            target = Path(self.cache.name) / "replay.mp4"
-            if key != self.replay_source or not target.exists():
-                self.replay_source = None
-                if target.exists():
-                    target.unlink()
+            digest = hashlib.sha256(repr(key).encode()).hexdigest()
+            target = Path(self.cache.name) / (digest + ".mp4")
+            if not target.exists():
+                temporary = target.with_suffix(".tmp.mp4")
                 proc = await asyncio.create_subprocess_exec(
                     ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
                     "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart", str(target),
+                    "-movflags", "+faststart", str(temporary),
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
                 _, err = await proc.communicate()
                 if proc.returncode:
+                    temporary.unlink(missing_ok=True)
                     raise ValueError(err.decode(errors="replace")[-1000:])
-                self.replay_source = key
+                temporary.replace(target)
             return target
 
     async def live(self, request):
         ffmpeg = shutil.which("ffmpeg")
         directory = self.active_dataset
-        if not ffmpeg or not directory or not self.local_running():
+        if not ffmpeg or not directory or not self.local_running() or self.local_stopping:
             raise ValueError("Live preview requires FFmpeg and an active receiver")
         source = directory / "video.mkv"
         if not source.is_file() or source.stat().st_size == 0:
@@ -252,12 +283,13 @@ class Vio:
             "-an", "-vf", "fps=10,scale=960:-2", "-c:v", "mjpeg", "-q:v", "5",
             "-f", "mpjpeg", "-boundary_tag", "racelab", "pipe:1",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        self.live_processes.add(proc)
         response = web.StreamResponse(headers={
             "Content-Type": "multipart/x-mixed-replace; boundary=racelab",
             "Cache-Control": "no-store"})
         try:
             await response.prepare(request)
-            while self.local_running() and self.active_dataset == directory:
+            while self.local_running() and not self.local_stopping and self.active_dataset == directory:
                 if request.transport is None or request.transport.is_closing():
                     break
                 try:
@@ -273,6 +305,7 @@ class Vio:
             if proc.returncode is None:
                 proc.kill()
             await proc.wait()
+            self.live_processes.discard(proc)
         return response
 
     async def close(self):
