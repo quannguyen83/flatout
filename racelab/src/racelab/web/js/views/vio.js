@@ -121,9 +121,9 @@ export class VioView extends RaceView {
     });
     this.piStatus = piStatus; this.receiverStatus = receiverStatus; this.datasetRoot = datasetRoot;
     const configuration = h("div.vio-config", {},
-      panel("Pi-send Configuration", dir.el, cmd.el, h("div.vio-actions", {}, this.piRun, this.piStop, piStatus)),
+      panel("Pi-send Configuration", dir.el, cmd.el, h("div.vio-actions.vio-module-footer", {}, this.piRun, this.piStop, piStatus)),
       panel("Laptop Receiver", h("div.vio-file", {}, file.el, this.browse), args.el, python.el,
-        h("div.vio-actions", {}, this.pcRun, this.pcStop, receiverStatus), datasetRoot));
+        datasetRoot, h("div.vio-actions.vio-module-footer", {}, this.pcRun, this.pcStop, receiverStatus)));
     this.dataset = h("select.input", {"aria-label": "Recorded dataset"});
     this.image = h("img.vio-media.hidden", {alt: "Live preview"});
     this.video = h("video.vio-media.hidden", {controls: true, preload: "metadata", playsinline: true});
@@ -140,8 +140,8 @@ export class VioView extends RaceView {
       h("div.eyebrow", {}, "Laptop Receiver"), this.pcLog);
     // Move the original DOM nodes, do not recreate BotCard or Race Feed.
     root.replaceChildren(h("div.race.vio", {}, configuration, this.error, this.shortBanner, this.bar,
-      h("div.vio-grid", {}, h("div.vio-column", {}, preview, this.bots, logs),
-        h("div.vio-column", {}, this.best, this.feedBox))));
+      h("div.vio-grid", {}, h("div.vio-column", {}, preview, logs),
+        h("div.vio-column", {}, this.best, this.bots, this.feedBox))));
     this.syncButtons();
     this.poll = new Poll(state => this.renderVio(state), msg => setText(this.error, msg));
     configure();

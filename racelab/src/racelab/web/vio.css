@@ -20,3 +20,7 @@
 .lap-times .who-line { display:block; }
 .race .bots-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 @media(max-width:850px) { .vio-config,.vio-grid { grid-template-columns:1fr; } }
+
+/* Equal-height acquisition cards: align their controls to the same bottom edge. */
+.vio-config > .vio-panel { align-self:stretch; min-height:0; }
+.vio-config .vio-module-footer { margin-top:auto; padding-top:10px; }
