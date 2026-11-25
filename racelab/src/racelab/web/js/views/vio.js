@@ -85,6 +85,34 @@ export class VioView extends RaceView {
     super(root);
     const dir = field("Remote directory", "directory", "~/carrera");
     const cmd = field("Run command", "command", "python3 pi_send.py LAPTOP_IP");
+    if (!dir.input.value) dir.input.value = "~/carrera";
+    if (!cmd.input.value) cmd.input.value = "python3 pi_send.py LAPTOP_IP";
+    const specs = [
+      ["Width", "width", 1280, 1], ["Height", "height", 720, 1],
+      ["FPS", "fps", 30, 1], ["Exposure (µs)", "exposure-us", 5000, 1],
+      ["Analogue gain", "gain", 6, 0.1], ["Lens position (D)", "lens-position", 2.45, 0.01],
+      ["IMU (Hz)", "imu-rate", 100, 1], ["Mag (Hz)", "mag-rate", 10, 1],
+      ["Light (Hz)", "light-rate", 10, 1], ["MJPEG bitrate", "mjpeg-bitrate", 16000000, 1],
+      ["Video port", "video-port", 5000, 1], ["Data port", "data-port", 5001, 1],
+      ["RTP MTU", "rtp-mtu", 1200, 1], ["AF log interval (s)", "af-log-interval", 1, 0.1],
+      ["IMU poll sleep (s)", "imu-ready-poll-sleep", 0.001, 0.001],
+    ];
+    const piFields = specs.map(([label, key, initial, step]) => {
+      const f = field(label, "pi-" + key, String(initial), "number");
+      f.input.value = prefs["pi-" + key] ?? String(initial);
+      f.input.step = String(step); f.input.min = "0"; f.input.required = true;
+      return {key, ...f};
+    });
+    const af = h("select.input", {}, ...["auto", "manual", "continuous"].map(v => h("option", {value:v}, v)));
+    af.value = prefs["pi-af-mode"] || "auto";
+    af.addEventListener("change", () => { prefs["pi-af-mode"] = af.value; writeJson(KEY, prefs); });
+    const afField = h("label.vio-field", {}, h("span", {}, "Autofocus"), af);
+    const piParams = () => {
+      for (const f of piFields) {
+        if (!f.input.reportValidity()) return null;
+      }
+      return Object.fromEntries([...piFields.map(f => [f.key, f.input.value]), ["af-mode", af.value]]);
+    };
     const file = field("Receiver file", "file", "C:\\...\\laptop_receiver.py");
     const args = field("Arguments (optional)", "args", "--output dataset");
     const python = field("Python executable (optional)", "python", "RaceLab Python");
@@ -100,7 +128,14 @@ export class VioView extends RaceView {
       catch(e) { setText(this.error, e.message); }
       finally { this.pending.delete(group); this.syncButtons(); }
     };
-    this.piRun = button("Run", () => act("pi-start", {directory: dir.input.value, command: cmd.input.value}, "pi"), "go");
+    this.piRun = button("Run", () => {
+      const params = piParams();
+      if (!params) return;
+      prefs.directory = dir.input.value; prefs.command = cmd.input.value;
+      for (const f of piFields) prefs["pi-" + f.key] = f.input.value;
+      prefs["pi-af-mode"] = af.value; writeJson(KEY, prefs);
+      act("pi-start", {directory: dir.input.value, command: cmd.input.value, params}, "pi");
+    }, "go");
     this.piStop = button("Stop", () => act("pi-stop", {}, "pi"), "danger");
     this.pcRun = button("Run", () => act("receiver-start", {file: file.input.value, args: args.input.value, python: python.input.value}, "receiver"), "go");
     this.pcStop = button("Stop", () => { if (this.mode === "live") this.clearMedia(); act("receiver-stop", {}, "receiver"); }, "danger");
@@ -121,17 +156,21 @@ export class VioView extends RaceView {
     });
     this.piStatus = piStatus; this.receiverStatus = receiverStatus; this.datasetRoot = datasetRoot;
     const configuration = h("div.vio-config", {},
-      panel("Pi-send Configuration", dir.el, cmd.el, h("div.vio-actions.vio-module-footer", {}, this.piRun, this.piStop, piStatus)),
+      panel("Pi-send Configuration",
+        h("details", {}, h("summary", {}, "Remote directory / command"), dir.el, cmd.el),
+        h("div.vio-fields", {}, ...piFields.slice(0,9).map(f => f.el), afField),
+        h("details", {}, h("summary", {}, "Advanced parameters"), h("div.vio-fields", {}, ...piFields.slice(9).map(f => f.el))),
+        h("div.vio-actions.vio-module-footer", {}, this.piRun, this.piStop, piStatus)),
       panel("Laptop Receiver", h("div.vio-file", {}, file.el, this.browse), args.el, python.el,
         datasetRoot, h("div.vio-actions.vio-module-footer", {}, this.pcRun, this.pcStop, receiverStatus)));
     this.dataset = h("select.input", {"aria-label": "Recorded dataset"});
     this.image = h("img.vio-media.hidden", {alt: "Live preview"});
     this.video = h("video.vio-media.hidden", {controls: true, preload: "metadata", playsinline: true});
-    this.previewNote = h("p.note", {}, "Start receiver to preview; FFmpeg is required for embedded video.");
+    this.previewNote = h("p.note", {}, "Start receiver for live preview; FFmpeg is only required for replay.");
     this.liveButton = button("Live", () => this.showLive());
     this.replayButton = button("Replay", () => this.showReplay());
     this.video.addEventListener("error", () => setText(this.previewNote, "Replay failed; check FFmpeg and dataset."));
-    this.image.addEventListener("error", () => { if (this.mode === "live") setText(this.previewNote, "Embedded live preview unavailable; use the receiver's native preview window."); });
+    this.image.addEventListener("error", () => { if (this.mode === "live") setText(this.previewNote, "Embedded live preview unavailable; check receiver logs and updated receiver version."); });
     const preview = panel("Video Preview", h("div.vio-actions", {}, this.liveButton, this.dataset, this.replayButton),
       h("div.vio-video", {}, this.image, this.video), this.previewNote);
     this.piLog = h("pre.vio-log", {role: "log"});
@@ -174,7 +213,12 @@ export class VioView extends RaceView {
         ...names.map(name => h("option", {value: name}, name)));
       this.dataset.value = names.includes(selection) ? selection : names[0] || "";
     }
-    this.liveButton.disabled = !s.receiver_running || !s.active_dataset || !s.ffmpeg;
+    this.liveButton.disabled = !s.receiver_running || !s.preview_port;
+    if (s.receiver_running && s.preview_port && this.autoPreviewPort !== s.preview_port) {
+      this.autoPreviewPort = s.preview_port;
+      this.showLive();
+    }
+    if (!s.receiver_running) this.autoPreviewPort = null;
     this.replayButton.disabled = !names.length || !s.ffmpeg;
     if (!s.receiver_running && this.mode === "live") {
       this.clearMedia(); setText(this.previewNote, "Receiver stopped; select dataset to replay.");
@@ -190,7 +234,7 @@ export class VioView extends RaceView {
     this.clearMedia(); this.mode = "live";
     this.image.classList.remove("hidden");
     this.image.src = mediaUrl("live");
-    setText(this.previewNote, "Live preview from the growing recording (may be delayed).");
+    setText(this.previewNote, "Live JPEG preview from receiver.");
   }
   showReplay() {
     if (!this.dataset.value) return;
