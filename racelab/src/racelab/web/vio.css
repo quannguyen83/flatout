@@ -24,3 +24,9 @@
 /* Equal-height acquisition cards: align their controls to the same bottom edge. */
 .vio-config > .vio-panel { align-self:stretch; min-height:0; }
 .vio-config .vio-module-footer { margin-top:auto; padding-top:10px; }
+
+/* Three parameters per row in acquisition cards; keep SSH settings unchanged. */
+.vio-config .vio-fields { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.vio-config .vio-field > .input { width:100%; min-width:0; box-sizing:border-box; }
+@media(max-width:600px) { .vio-config .vio-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:380px) { .vio-config .vio-fields { grid-template-columns:minmax(0,1fr); } }
