@@ -11,6 +11,7 @@ import socket
 import math
 import shutil
 import sys
+import subprocess
 import tempfile
 from collections import deque
 from pathlib import Path
@@ -25,6 +26,19 @@ def loopback(value):
         return ipaddress.ip_address(value).is_loopback
     except ValueError:
         return value == "localhost"
+
+
+def windows_process_options(*, receiver=False):
+    """Keep desktop acquisition console-free visually, with a hidden console
+    for the receiver's GStreamer CTRL_BREAK_EVENT shutdown on Windows."""
+    if sys.platform != "win32":
+        return {}
+    if receiver:
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        return {"startupinfo": startup, "creationflags": subprocess.CREATE_NEW_CONSOLE}
+    return {"creationflags": subprocess.CREATE_NO_WINDOW}
 
 
 class Vio:
@@ -239,7 +253,8 @@ class Vio:
                 self.local = await asyncio.create_subprocess_exec(
                     python, "-u", str(Path(__file__).with_name("vio_runner.py")), str(script), *args,
                     cwd=str(script.parent), stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                    **windows_process_options(receiver=True))
                 self.local_task = asyncio.create_task(self.collect_local(self.local))
             elif op == "receiver-stop":
                 await self.stop_local()
@@ -284,7 +299,8 @@ class Vio:
                     ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
                     "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart", str(temporary),
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                    **windows_process_options())
                 _, err = await proc.communicate()
                 if proc.returncode:
                     temporary.unlink(missing_ok=True)
