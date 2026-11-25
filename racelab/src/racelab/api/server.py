@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import itertools
 import json
@@ -27,6 +28,20 @@ from .vio import register_vio
 logger = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+
+
+def _runtime_build_id() -> str:
+    """Fingerprint this checkout at startup, not at each API request."""
+    root = WEB_DIR.parent
+    digest = hashlib.sha256(str(root).encode("utf-8"))
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.suffix in {".py", ".js", ".css", ".html", ".json"}:
+            digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+RUNTIME_BUILD_ID = _runtime_build_id()
 MAX_STATE_HZ = 20.0
 MAX_UPLOAD = 512 * 1024
 _ids = itertools.count(1)
@@ -159,7 +174,7 @@ def create_web_app(app: RaceLabApp) -> web.Application:
         return _json(app.snapshot())
 
     async def get_meta(request):
-        return _json(app.meta())
+        return _json({**app.meta(), "runtime_build_id": RUNTIME_BUILD_ID})
 
     async def get_laps(request):
         slot = request.query.get("slot")
