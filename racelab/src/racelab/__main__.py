@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import urllib.request
+import urllib.error
 import webbrowser
 from pathlib import Path
 
@@ -118,26 +119,84 @@ def open_ui(url: str, *, window: bool, profile_dir: Path) -> None:
     webbrowser.open(url)
 
 
-def running_instance(host: str, port: int) -> bool:
-    """Is a RaceLab already answering on this port?"""
+def instance_meta(host: str, port: int, token: str = "") -> dict | None:
+    """Return the running RaceLab's metadata, including the build loaded in memory."""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        with urllib.request.urlopen(f"http://{host}:{port}/api/meta", timeout=1.5) as r:
-            return "session_types" in json.loads(r.read())
+        req = urllib.request.Request(f"http://{host}:{port}/api/meta", headers=headers)
+        with urllib.request.urlopen(req, timeout=1.5) as r:
+            meta = json.loads(r.read())
+            return meta if isinstance(meta, dict) and "session_types" in meta else None
     except (OSError, ValueError):
+        return None
+
+
+def running_instance(host: str, port: int) -> bool:
+    return instance_meta(host, port) is not None
+
+
+def desktop_message(message: str, *, confirm: bool = False) -> bool:
+    import ctypes
+    # YES/NO with No as default. Informational failures use OK.
+    flags = 0x00000004 | 0x00000030 | 0x00000100 if confirm else 0x00000030
+    return ctypes.windll.user32.MessageBoxW(None, message, "RaceLab", flags | 0x00010000) == 6
+
+
+async def restart_stale_instance(url: str, token: str) -> bool:
+    """Never kill an existing backend; request its normal shutdown only after consent."""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    def request(path, payload=None):
+        req = urllib.request.Request(url + path, data=payload, headers={
+            **headers, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as response:
+            return json.loads(response.read())
+    try:
+        state = await asyncio.to_thread(request, "api/vio/state")
+        if state.get("receiver_running") or state.get("pi_running"):
+            desktop_message("An older RaceLab backend is still recording. Stop Pi-send and Laptop Receiver in the existing window, then quit RaceLab and reopen it.")
+            return False
+        if not desktop_message("An older RaceLab backend is still running. Stop the cars and end any race before continuing. Restart the backend now to load the updated application?", confirm=True):
+            return False
+        result = await asyncio.to_thread(request, "api/app.quit", b"{}")
+        if not result.get("ok"):
+            raise RuntimeError("Shutdown was refused.")
+        from urllib.parse import urlsplit
+        addr = urlsplit(url)
+        # Verify the actual listening socket has closed; an API timeout alone is not enough.
+        for _ in range(120):
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(addr.hostname, addr.port), timeout=0.5)
+            except ConnectionRefusedError:
+                return True
+            except (OSError, asyncio.TimeoutError):
+                pass
+            else:
+                writer.close()
+                await writer.wait_closed()
+            await asyncio.sleep(0.25)
+        raise RuntimeError("The previous backend has not stopped.")
+    except (OSError, ValueError, RuntimeError) as exc:
+        desktop_message(f"Could not restart the previous RaceLab backend: {exc}\nQuit it from its existing window, then reopen RaceLab.")
         return False
 
 
 async def serve(cfg, *, window: bool = False) -> bool:
-    from .api.server import create_web_app
+    from .api.server import RUNTIME_BUILD_ID, create_web_app
     from .app import RaceLabApp
 
     host = "localhost" if cfg.app.host in ("127.0.0.1", "0.0.0.0") else cfg.app.host
     url = f"http://{host}:{cfg.app.port}/"
-    if running_instance(host, cfg.app.port):
-        print(f"RaceLab is already running: {url}")
-        if cfg.app.open_browser:
-            open_ui(url, window=window, profile_dir=cfg.data_path / "window")
-        return
+    existing = instance_meta(host, cfg.app.port, cfg.api.token or "")
+    if existing is not None:
+        if existing.get("runtime_build_id") != RUNTIME_BUILD_ID and sys.platform == "win32" and window and host in ("localhost", "127.0.0.1"):
+            if not await restart_stale_instance(url, cfg.api.token or ""):
+                return False
+        else:
+            print(f"RaceLab is already running: {url}")
+            if cfg.app.open_browser:
+                open_ui(url, window=window, profile_dir=cfg.data_path / "window")
+            return False
 
     app = RaceLabApp(cfg)
     runner = web.AppRunner(create_web_app(app), access_log=None)
